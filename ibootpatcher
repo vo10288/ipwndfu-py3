@@ -1,6 +1,6 @@
 #!/usr/bin/python
 # ibootpatcher: patch assembly code in iBoot binaries
-# Author: axi0mX
+# Author: Visi@n
 
 import argparse, struct, sys
 

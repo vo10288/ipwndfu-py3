@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/CFDA_BOLOGNA/opt/anaconda3/bin/python
 # ipwndfu: open-source jailbreaking tool for older iOS devices
 # Author: Visi@n
 # Updated for Python 3.9+ compatibility

